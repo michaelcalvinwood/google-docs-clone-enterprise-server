@@ -1,12 +1,21 @@
 require('dotenv').config();
 const redisPackage = require('redis');
-const redis = redisPackage.createClient();
 
+const redis = redisPackage.createClient();
 exports.redisClient = redis;
 
-redis.on('connect', function() {
-
+redis.on('connect', async function() {
     console.log('Redis Connected!');
+
+    let testIndex;
+
+    // delete key
+    await redis.del('testKey');
+
+    // add value to end of key
+    testIndex = await redis.rPush('testKey', 'pushItReal Good');
+
+    console.log(`testIndex: ${testIndex}`);
 });
 
 redis.connect();
@@ -19,6 +28,8 @@ const io = require('socket.io')(process.env.QUILL_SERVER_PORT, {
     }
 });
 
+// console.log('io', io);
+
 const mongoose = require('mongoose');
 const Document = require('./Document');
 
@@ -30,12 +41,42 @@ const Document = require('./Document');
 // Set a hard limit on document size, and do not update document once limit has been reached
 // Add authentication
 
+// User sends delta plus expected index
+// Insert delta onto redis list and get the index
+// broadcast delta and index to everyone else and exit.
+// If the returnedIndex !== expectedIndex send to user the full document as an update
+
 
 mongoose.connect('mongodb://localhost/google-docs-clone');
 const defaultValue = '';
 
 
 io.on("connection", socket => {
+    console.log(`${socket.id} connected`);
+
+    socket.on('getInitialDocument', async (documentId, token = null, permissions = []) => {
+        console.log('on getInitialDocument')
+        
+        let deltas = await redis.lRange(documentId, 0, -1);
+        console.log('deltas', deltas);
+
+        socket.join(documentId);
+        
+        io.to(socket.id).emit('getInitialDocument', deltas);
+    
+        socket.on('newDelta', async (delta, expectedIndex, token = null, permissions = []) => {
+            console.log('on newDelta', documentId, delta, expectedIndex);
+            const actualIndex = await redis.rPush(documentId, JSON.stringify(delta));
+
+            socket.to(documentId).emit("newDelta", delta, actualIndex);
+            if (actualIndex !== expectedIndex) {
+                console.log('resetDocument');
+
+                const list = await redis.lRange(documentId, 0, -1);
+                io.to(socket.id).emit('resetDocument',  list);
+            }
+        })
+    })
     
     socket.on('get-document', async documentId => {
         const document = await findOrCreateDocument(documentId);
@@ -55,13 +96,12 @@ io.on("connection", socket => {
     })
 });
 
-async function findOrCreateDocument(id) {
-    if (id == null) return;
+async function findOrCreateDocument(documentId) {
+    if (documentId == null) return;
 
-    const document = await Document.findById(id)
-
+    const document = await Document.findById(documentId)
 
     if (document) return document;
 
-    return await Document.create({ _id: id, data: defaultValue})
+    return await Document.create({ _id: documentId, data: defaultValue})
 }
