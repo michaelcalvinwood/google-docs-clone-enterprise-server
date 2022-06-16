@@ -1,10 +1,11 @@
 const { S3, AbortMultipartUploadCommand, CreateBucketCommand, ListBucketsCommand, PutObjectCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+const redisPackage = require('redis');
+const redis = redisPackage.createClient();
+const { v4: uuidv4 } = require('uuid');
 
 require('dotenv').config();
-const redisPackage = require('redis');
 
-const redis = redisPackage.createClient();
 exports.redisClient = redis;
 
 const s3Client = new S3({
@@ -17,8 +18,11 @@ const s3Client = new S3({
 });
 
 const Bucket = process.env.S3_BUCKET;
+const ContentType = 'image';
+const expiresIn = 900;
 
-const getPutSignedUrl = async (Key, ContentType, expiresIn = 900) => {
+const getPutSignedUrl = async (fileExtension) => {
+    const Key = uuidv4();
     const bucketParams = {Bucket, Key, ContentType};
   
     try {
@@ -108,8 +112,9 @@ io.on("connection", socket => {
         });
     })
 
-    socket.on('get-upload-url', async (fileName, fileType) => {
-        const url = getPutSignedUrl(fileName, fileType);
+    socket.on('get-upload-url', async (fileExtension) => {
+        const url = getPutSignedUrl(fileExtension);
+        io.to(socket.id).emit('get-upload-url', url);
     });
 });
 
