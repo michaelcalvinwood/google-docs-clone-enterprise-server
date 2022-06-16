@@ -9,6 +9,8 @@
   "author": "Michael Wood",
   "license": "SEE LICENSE IN License.md",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.110.0",
+    "@aws-sdk/s3-request-presigner": "^3.110.0",
     "dotenv": "^16.0.1",
     "express": "^4.18.1",
     "mongoose": "^6.3.4",

@@ -1,28 +1,38 @@
 const { S3, AbortMultipartUploadCommand, CreateBucketCommand, ListBucketsCommand, PutObjectCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const redisPackage = require('redis');
-const redis = redisPackage.createClient();
 const { v4: uuidv4 } = require('uuid');
 
 require('dotenv').config();
 
+
+const redis = redisPackage.createClient({
+    socket: {
+        host: process.env.REDIS_HOST,
+        port: process.env.REDIS_PORT
+    }
+});
 exports.redisClient = redis;
 
-const s3Client = new S3({
+const options = {
     endpoint: process.env.S3_ENDPOINT,
     region: process.env.S3_REGION,
     credentials: {
       accessKeyId: process.env.S3_KEY,
       secretAccessKey: process.env.S3_SECRET
     }
-});
+}
+
+console.log('options', options);
+
+const s3Client = new S3(options);
 
 const Bucket = process.env.S3_BUCKET;
 const ContentType = 'image';
 const expiresIn = 900;
 
 const getPutSignedUrl = async (fileExtension) => {
-    const Key = uuidv4();
+    const Key = uuidv4() + '.' + fileExtension;
     const bucketParams = {Bucket, Key, ContentType};
   
     try {
@@ -49,7 +59,7 @@ const io = require('socket.io')(process.env.QUILL_SERVER_PORT, {
     maxHttpBufferSize: 1e8
 });
 
-const mongoose = require('mongoose');
+// const mongoose = require('mongoose');
 const Document = require('./Document');
 
 // Convert image uploads to S3 saved images
@@ -65,7 +75,7 @@ const Document = require('./Document');
 // If the returnedIndex !== expectedIndex send to user the full document as an update
 
 
-mongoose.connect('mongodb://localhost/google-docs-clone');
+// mongoose.connect('mongodb://localhost/google-docs-clone');
 const defaultValue = '';
 
 io.on("connection", socket => {
@@ -112,18 +122,27 @@ io.on("connection", socket => {
         });
     })
 
-    socket.on('get-upload-url', async (fileExtension) => {
-        const url = getPutSignedUrl(fileExtension);
-        io.to(socket.id).emit('get-upload-url', url);
+    socket.on('get-upload-url', async (signatureData) => {
+        console.log ('on get-upload-url', signatureData)
+        let result = [];
+        for (let i = 0; i < signatureData.length; ++i) {
+            const url = await getPutSignedUrl(signatureData[i].extension);
+            result.push({
+                path: signatureData[i].path,
+                url
+            })
+        }
+        console.log('emit get-upload-url', result);
+        io.to(socket.id).emit('get-upload-url', result);
     });
 });
 
-async function findOrCreateDocument(documentId) {
-    if (documentId == null) return;
+// async function findOrCreateDocument(documentId) {
+//     if (documentId == null) return;
 
-    const document = await Document.findById(documentId)
+//     const document = await Document.findById(documentId)
 
-    if (document) return document;
+//     if (document) return document;
 
-    return await Document.create({ _id: documentId, data: defaultValue})
-}
+//     return await Document.create({ _id: documentId, data: defaultValue})
+// }
