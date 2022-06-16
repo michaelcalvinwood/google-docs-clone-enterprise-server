@@ -1,21 +1,37 @@
+const { S3, AbortMultipartUploadCommand, CreateBucketCommand, ListBucketsCommand, PutObjectCommand } = require("@aws-sdk/client-s3");
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+
 require('dotenv').config();
 const redisPackage = require('redis');
 
 const redis = redisPackage.createClient();
 exports.redisClient = redis;
 
+const s3Client = new S3({
+    endpoint: process.env.S3_ENDPOINT,
+    region: process.env.S3_REGION,
+    credentials: {
+      accessKeyId: process.env.S3_KEY,
+      secretAccessKey: process.env.S3_SECRET
+    }
+});
+
+const Bucket = process.env.S3_BUCKET;
+
+const getPutSignedUrl = async (Key, ContentType, expiresIn = 900) => {
+    const bucketParams = {Bucket, Key, ContentType};
+  
+    try {
+      const url = await getSignedUrl(s3Client, new PutObjectCommand({Bucket, Key, ContentType}), { expiresIn }); 
+      return url;
+    } catch (err) {
+      console.log("Error getPutSignedUrl", err);
+      return false;
+    }
+};
+  
 redis.on('connect', async function() {
-    console.log('Redis Connected!');
-
-    let testIndex;
-
-    // delete key
-    await redis.del('testKey');
-
-    // add value to end of key
-    testIndex = await redis.rPush('testKey', 'pushItReal Good');
-
-    console.log(`testIndex: ${testIndex}`);
+    console.log('Redis Connected');
 });
 
 redis.connect();
@@ -28,8 +44,6 @@ const io = require('socket.io')(process.env.QUILL_SERVER_PORT, {
     },
     maxHttpBufferSize: 1e8
 });
-
-// console.log('io', io);
 
 const mongoose = require('mongoose');
 const Document = require('./Document');
@@ -49,7 +63,6 @@ const Document = require('./Document');
 
 mongoose.connect('mongodb://localhost/google-docs-clone');
 const defaultValue = '';
-
 
 io.on("connection", socket => {
     console.log(`${socket.id} connected`);
@@ -94,6 +107,10 @@ io.on("connection", socket => {
             await Document.findByIdAndUpdate(documentId, { data: data});
         });
     })
+
+    socket.on('get-upload-url', async (fileName, fileType) => {
+        const url = getPutSignedUrl(fileName, fileType);
+    });
 });
 
 async function findOrCreateDocument(documentId) {
