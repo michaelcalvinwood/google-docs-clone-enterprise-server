@@ -2,10 +2,13 @@ const { S3, AbortMultipartUploadCommand, CreateBucketCommand, ListBucketsCommand
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const redisPackage = require('redis');
 const { v4: uuidv4 } = require('uuid');
+const HTMLtoDOCX = require('html-to-docx');
+const fs = require('fs');
+const fsp = require('fs').promises;
+const pandoc = require('node-pandoc');
+const { Blob } = require("buffer");
 
 require('dotenv').config();
-
-var fs = require('fs');
 
 var serverOptions = {
   key: fs.readFileSync('/etc/letsencrypt/live/google-docs-clone.appgalleria.com/privkey.pem'),
@@ -32,6 +35,7 @@ const redis = redisPackage.createClient({
 });
 exports.redisClient = redis;
 
+// create an S3 client
 const options = {
     endpoint: process.env.S3_ENDPOINT,
     region: process.env.S3_REGION,
@@ -44,6 +48,8 @@ const options = {
 console.log('options', options);
 
 const s3Client = new S3(options);
+
+// function for getting signed put urls
 
 const Bucket = process.env.S3_BUCKET;
 const ContentType = 'image';
@@ -60,6 +66,56 @@ const getPutSignedUrl = async (Key) => {
       return false;
     }
 };
+
+const upload = async () => {
+    console.log('upload');
+    const data = await fsp.readFile("/var/www/html-to-docx.appgalleria.com/yoyo.docx");
+      
+        const bucketParams = {
+            Bucket: process.env.S3_BUCKET,
+            Key: "yoyo.docx",
+            Body: data,
+            ACL: 'public-read',
+            'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+          };
+          console.log('saveFileFromBinaryContents');
+          try {
+            const data = await s3Client.send(new PutObjectCommand(bucketParams));
+            console.log(
+              "Successfully uploaded object: " +
+                bucketParams.Bucket +
+                "/" +
+                bucketParams.Key
+            );
+            return data;
+          } catch (err) {
+            console.log("Error", err);
+          }
+        
+};
+
+const saveFileFromBinaryContents = async (content) => {
+    const bucketParams = {
+        Bucket: process.env.S3_BUCKET,
+        Key: "yoyo.docx",
+        SourceFile: "/var/www/html-to-docx.appgalleria.com/yoyo.docx",
+        ACL: 'public-read',
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      };
+      console.log('saveFileFromBinaryContents');
+      try {
+        const data = await s3Client.send(new PutObjectCommand(bucketParams));
+        console.log(
+          "Successfully uploaded object: " +
+            bucketParams.Bucket +
+            "/" +
+            bucketParams.Key
+        );
+        return data;
+      } catch (err) {
+        console.log("Error", err);
+      }
+}
   
 redis.on('connect', async function() {
     console.log('Redis Connected');
@@ -70,6 +126,7 @@ redis.connect();
 
 
 const Document = require('./Document');
+const { createSocket } = require("dgram");
 const defaultValue = '';
 
 io.on("connection", socket => {
@@ -106,7 +163,26 @@ io.on("connection", socket => {
         console.log(`${socket.id} has disconnected.`);
     })
     
+    socket.on('downloadWord', async src => {
+        args = '-f html -t docx -o /var/www/html-to-docx.appgalleria.com/yoyo.docx';
+        //args = '-f html -t docx';
 
+        callback = async function (err, result) {
+            if (err) {
+                console.error('Oh Nos: ',err);
+            }
+
+            // var blob = new Blob([result], {type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
+            // const json = JSON.stringify({ blob: result.toString("base64") });
+            // console.log('blob', json);
+
+            const answer = await upload();
+            io.to(socket.id).emit('downloadWord', 'yes');
+          };
+           
+          // Call pandoc
+          pandoc(src, args, callback);
+    })
 
     socket.on('get-upload-url', async (signatureData, documentId) => {
         console.log ('on get-upload-url', signatureData)
