@@ -1,4 +1,4 @@
-const { S3, AbortMultipartUploadCommand, CreateBucketCommand, ListBucketsCommand, PutObjectCommand } = require("@aws-sdk/client-s3");
+const { S3, ListObjectsV2Command , PutObjectCommand, DeleteObjectsCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const redisPackage = require('redis');
 const { v4: uuidv4 } = require('uuid');
@@ -45,7 +45,6 @@ const options = {
     }
 }
 
-console.log('options', options);
 
 const s3Client = new S3(options);
 
@@ -67,8 +66,9 @@ const getPutSignedUrl = async (Key) => {
     }
 };
 
+// upload local file to S3
+
 const upload = async (fileName, documentId, extension) => {
-    console.log('upload');
     const data = await fsp.readFile(fileName);
     let contentType = '';
 
@@ -89,11 +89,10 @@ const upload = async (fileName, documentId, extension) => {
         ACL: 'public-read',
         'Content-Type': contentType
       };
-      console.log('upload');
+    
       try {
         const data = await s3Client.send(new PutObjectCommand(bucketParams));
         const link = `https://${process.env.S3_BUCKET}.${process.env.S3_ENDPOINT_DOMAIN}/${bucketParams.Key}`;
-        console.log(`Successfully uploaded object: ${link}`);
         return link;
       } catch (err) {
         console.log("Error", err);
@@ -102,49 +101,49 @@ const upload = async (fileName, documentId, extension) => {
         
 };
 
-const saveFileFromBinaryContents = async (content) => {
-    const bucketParams = {
+// erase all S3 files in directory
+
+const eraseS3Contents = async (folder) => {
+    const listParams = {
         Bucket: process.env.S3_BUCKET,
-        Key: "yoyo.docx",
-        SourceFile: "/var/www/html-to-docx.appgalleria.com/yoyo.docx",
-        ACL: 'public-read',
-        'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-      };
-      console.log('saveFileFromBinaryContents');
-      try {
-        const data = await s3Client.send(new PutObjectCommand(bucketParams));
-        console.log(
-          "Successfully uploaded object: " +
-            bucketParams.Bucket +
-            "/" +
-            bucketParams.Key
-        );
-        return data;
-      } catch (err) {
-        console.log("Error", err);
-      }
+        Prefix: `${folder}/`
+    };
+
+    const listedObjects = await s3Client.send(new ListObjectsV2Command(listParams));
+
+    if (!listedObjects.Contents) return;
+    if (listedObjects.Contents.length === 0) return;
+
+    const deleteParams = {
+        Bucket: process.env.S3_BUCKET,
+        Delete: { Objects: [] }
+    };
+
+    listedObjects.Contents.forEach(({ Key }) => {
+        deleteParams.Delete.Objects.push({ Key });
+    });
+
+    await s3Client.send(new DeleteObjectsCommand(deleteParams));
+
+    if (listedObjects.IsTruncated) await eraseS3Contents(folder);
 }
-  
+
+// connect to redis server  
 redis.on('connect', async function() {
     console.log('Redis Connected');
 });
 
 redis.connect();
 
-
-
 const Document = require('./Document');
-const { createSocket } = require("dgram");
+// const { createSocket } = require("dgram");
 const defaultValue = '';
 
 io.on("connection", socket => {
-    console.log(`${socket.id} connected`);
 
     socket.on('getInitialDocument', async (documentId, token = null, permissions = []) => {
-        console.log('on getInitialDocument')
         
         let deltas = await redis.lRange(documentId, 0, -1);
-        console.log('deltas', deltas);
 
         socket.join(documentId);
         
@@ -152,10 +151,8 @@ io.on("connection", socket => {
     })
 
     socket.on('newDelta', async (documentId, delta, expectedIndex, token = null, permissions = []) => {
-        console.log('on newDelta', documentId, delta, expectedIndex);
 
         const actualIndex = await redis.rPush(documentId, JSON.stringify(delta));
-        console.log(`expectedIndex: ${expectedIndex} — actualIndex: ${actualIndex}`);
 
         io.to(documentId).emit("newDelta", delta, actualIndex+1, socket.id);
         
@@ -163,12 +160,9 @@ io.on("connection", socket => {
 
         let deltas = await redis.lRange(documentId, 0, -1);
         io.to(socket.id).emit('getInitialDocument', deltas);
-        
-
     });
 
     socket.on('disconnect', () => {
-        console.log(`${socket.id} has disconnected.`);
     })
     
     socket.on('downloadWord', async (src, documentId) => {
@@ -178,10 +172,12 @@ io.on("connection", socket => {
         callback = async function (err, result) {
             if (err) {
                 console.error('Oh Nos: ',err);
+                io.to(socket.id).emit('downloadWord', '');
+                return;
+            } else {
+                const link = await upload(outFile, documentId, '.docx');
+                io.to(socket.id).emit('downloadWord', link);    
             }
-
-            const link = await upload(outFile, documentId, '.docx');
-            io.to(socket.id).emit('downloadWord', link);
           };
            
           // Call pandoc
@@ -195,10 +191,14 @@ io.on("connection", socket => {
         callback = async function (err, result) {
             if (err) {
                 console.error('Oh Nos: ',err);
+                io.to(socket.id).emit('downloadPdf', '');
+                return;
+            } else {
+                const link = await upload(outFile, documentId, '.pdf');
+                io.to(socket.id).emit('downloadPdf', link);
+    
             }
 
-            const link = await upload(outFile, documentId, '.pdf');
-            io.to(socket.id).emit('downloadPdf', link);
           };
            
           // Call pandoc
@@ -206,7 +206,6 @@ io.on("connection", socket => {
     })
 
     socket.on('get-upload-url', async (signatureData, documentId) => {
-        console.log ('on get-upload-url', signatureData)
         let result = [];
         for (let i = 0; i < signatureData.length; ++i) {
             const fileName = `${documentId}/${uuidv4()}.${signatureData[i].extension}`;
@@ -217,9 +216,12 @@ io.on("connection", socket => {
                 url
             })
         }
-        console.log('emit get-upload-url', result);
         io.to(socket.id).emit('get-upload-url', result);
     });
 
-    
+    socket.on('cleanDocument', async documentId => {
+      await eraseS3Contents(documentId);
+      await redis.del(documentId);
+      io.in(documentId).emit('getInitialDocument', []);
+    });
 });
