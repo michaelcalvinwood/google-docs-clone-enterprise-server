@@ -67,30 +67,38 @@ const getPutSignedUrl = async (Key) => {
     }
 };
 
-const upload = async () => {
+const upload = async (fileName, documentId, extension) => {
     console.log('upload');
-    const data = await fsp.readFile("/var/www/html-to-docx.appgalleria.com/yoyo.docx");
-      
-        const bucketParams = {
-            Bucket: process.env.S3_BUCKET,
-            Key: "yoyo.docx",
-            Body: data,
-            ACL: 'public-read',
-            'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-          };
-          console.log('saveFileFromBinaryContents');
-          try {
-            const data = await s3Client.send(new PutObjectCommand(bucketParams));
-            console.log(
-              "Successfully uploaded object: " +
-                bucketParams.Bucket +
-                "/" +
-                bucketParams.Key
-            );
-            return data;
-          } catch (err) {
-            console.log("Error", err);
-          }
+    const data = await fsp.readFile(fileName);
+    let contentType = '';
+
+    switch (extension.toLowerCase()) {
+      case '.docx':
+          contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+          break;
+      case '.pdf':
+          contentType = 'application/pdf'
+          break;
+
+    }
+
+    const bucketParams = {
+        Bucket: process.env.S3_BUCKET,
+        Key: `${documentId}/${documentId}${extension}`,
+        Body: data,
+        ACL: 'public-read',
+        'Content-Type': contentType
+      };
+      console.log('upload');
+      try {
+        const data = await s3Client.send(new PutObjectCommand(bucketParams));
+        const link = `https://${process.env.S3_BUCKET}.${process.env.S3_ENDPOINT_DOMAIN}/${bucketParams.Key}`;
+        console.log(`Successfully uploaded object: ${link}`);
+        return link;
+      } catch (err) {
+        console.log("Error", err);
+        return '';
+      }
         
 };
 
@@ -163,21 +171,34 @@ io.on("connection", socket => {
         console.log(`${socket.id} has disconnected.`);
     })
     
-    socket.on('downloadWord', async src => {
-        args = '-f html -t docx -o /var/www/html-to-docx.appgalleria.com/yoyo.docx';
-        //args = '-f html -t docx';
-
+    socket.on('downloadWord', async (src, documentId) => {
+      const outFile = `/var/www/html-to-docx.appgalleria.com/${documentId}.docx`;
+        args = `-f html -t docx -o ${outFile}`;
+        
         callback = async function (err, result) {
             if (err) {
                 console.error('Oh Nos: ',err);
             }
 
-            // var blob = new Blob([result], {type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
-            // const json = JSON.stringify({ blob: result.toString("base64") });
-            // console.log('blob', json);
+            const link = await upload(outFile, documentId, '.docx');
+            io.to(socket.id).emit('downloadWord', link);
+          };
+           
+          // Call pandoc
+          pandoc(src, args, callback);
+    })
 
-            const answer = await upload();
-            io.to(socket.id).emit('downloadWord', 'yes');
+    socket.on('downloadPdf', async (src, documentId) => {
+      const outFile = `/var/www/html-to-docx.appgalleria.com/${documentId}.pdf`;
+        args = `-f html -t pdf -o ${outFile}`;
+        
+        callback = async function (err, result) {
+            if (err) {
+                console.error('Oh Nos: ',err);
+            }
+
+            const link = await upload(outFile, documentId, '.pdf');
+            io.to(socket.id).emit('downloadPdf', link);
           };
            
           // Call pandoc
